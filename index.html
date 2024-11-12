@@ -70,8 +70,6 @@
             padding: 0.5rem;
             background: #f3f4f6;
             border-radius: 0.25rem;
-            text-decoration: none;
-            color: #2563eb;
         }
         .pdf-link:hover {
             background: #e5e7eb;
@@ -94,14 +92,24 @@
             background: #f3f4f6;
             color: #1f2937;
         }
-        iframe {
+        .status.downloading {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+        #progressBar {
+            width: 100%;
+            height: 20px;
+            background-color: #f3f4f6;
+            border-radius: 10px;
+            margin-top: 1rem;
+            overflow: hidden;
             display: none;
         }
-        .download-frame {
+        #progressFill {
+            height: 100%;
             width: 0;
-            height: 0;
-            border: 0;
-            display: none;
+            background-color: #2563eb;
+            transition: width 0.3s ease;
         }
     </style>
 </head>
@@ -129,7 +137,9 @@
         <p>PDF links will appear here...</p>
     </div>
 
-    <div id="downloadFrames"></div>
+    <div id="progressBar">
+        <div id="progressFill"></div>
+    </div>
 
     <script>
         let downloadQueue = [];
@@ -150,6 +160,37 @@
                 return filename || 'download.pdf';
             } catch {
                 return 'download.pdf';
+            }
+        }
+
+        async function forceDownload(url, filename) {
+            try {
+                const response = await fetch(url, {
+                    mode: 'cors',
+                    credentials: 'omit'
+                });
+                
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = blobUrl;
+                a.download = filename || getFilenameFromUrl(url);
+                
+                document.body.appendChild(a);
+                a.click();
+                
+                // Cleanup
+                window.URL.revokeObjectURL(blobUrl);
+                document.body.removeChild(a);
+                
+                return true;
+            } catch (error) {
+                console.error('Download failed:', error);
+                return false;
             }
         }
 
@@ -252,6 +293,9 @@
                     <button onclick="stopDownloads()" id="stopBtn" style="display: none">Stop Downloads</button>
                 </div>
             `;
+
+            document.getElementById('progressBar').style.display = 'none';
+            document.getElementById('progressFill').style.width = '0%';
         }
 
         function updateLinkStatus(index, status) {
@@ -263,24 +307,25 @@
             }
         }
 
+        function updateProgress(current, total) {
+            const progressBar = document.getElementById('progressBar');
+            const progressFill = document.getElementById('progressFill');
+            progressBar.style.display = 'block';
+            const percentage = (current / total) * 100;
+            progressFill.style.width = `${percentage}%`;
+        }
+
         async function downloadSingle(index) {
             const link = downloadQueue[index];
             try {
                 updateLinkStatus(index, 'downloading');
-                
-                // Create an anchor element and trigger download
-                const a = document.createElement('a');
-                a.href = link.url;
-                a.download = link.text;
-                a.target = '_blank';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                
-                updateLinkStatus(index, 'success');
+                const success = await forceDownload(link.url, link.text);
+                updateLinkStatus(index, success ? 'success' : 'error');
+                return success;
             } catch (error) {
                 console.error(`Failed to download ${link.url}:`, error);
                 updateLinkStatus(index, 'error');
+                return false;
             }
         }
 
@@ -291,16 +336,23 @@
             document.getElementById('stopBtn').style.display = 'inline-block';
             
             isDownloading = true;
+            let successCount = 0;
             
             for (let i = 0; i < downloadQueue.length && isDownloading; i++) {
-                await downloadSingle(i);
+                updateProgress(i, downloadQueue.length);
+                const success = await downloadSingle(i);
+                if (success) successCount++;
                 // Add delay between downloads to prevent browser throttling
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
             
+            updateProgress(downloadQueue.length, downloadQueue.length);
+            
             isDownloading = false;
             document.getElementById('downloadAllBtn').style.display = 'inline-block';
             document.getElementById('stopBtn').style.display = 'none';
+            
+            alert(`Download complete! Successfully downloaded ${successCount} of ${downloadQueue.length} files.`);
         }
 
         function stopDownloads() {
