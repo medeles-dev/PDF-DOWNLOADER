@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Link Downloader</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .input-group {
+            margin-bottom: 1rem;
+        }
+        input[type="url"], textarea {
+            width: 100%;
+            padding: 0.5rem;
+            margin-bottom: 1rem;
+            font-family: monospace;
+        }
+        textarea {
+            min-height: 150px;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 1rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .tab {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            margin-bottom: -2px;
+        }
+        .tab.active {
+            border-bottom: 2px solid #2563eb;
+            color: #2563eb;
+            font-weight: bold;
+        }
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            margin-right: 0.5rem;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 1rem;
+            padding: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.25rem;
+        }
+        .pdf-link {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 0.5rem 0;
+            padding: 0.5rem;
+            background: #f3f4f6;
+            border-radius: 0.25rem;
+            text-decoration: none;
+            color: #2563eb;
+        }
+        .pdf-link:hover {
+            background: #e5e7eb;
+        }
+        .status {
+            font-size: 0.875rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            margin-left: 1rem;
+        }
+        .status.success {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .status.pending {
+            background: #f3f4f6;
+            color: #1f2937;
+        }
+        iframe {
+            display: none;
+        }
+        .download-frame {
+            width: 0;
+            height: 0;
+            border: 0;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>PDF Link Downloader</h1>
+    
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('webpage')">From Webpage</button>
+        <button class="tab" onclick="switchTab('bulk')">Bulk Links</button>
+    </div>
+
+    <div id="webpage-input" class="input-group">
+        <label for="urlInput">Enter webpage URL:</label>
+        <input type="url" id="urlInput" placeholder="https://example.com" required>
+        <button onclick="findPDFs()">Find PDFs</button>
+    </div>
+
+    <div id="bulk-input" class="input-group" style="display: none;">
+        <label for="bulkInput">Enter PDF URLs (one per line):</label>
+        <textarea id="bulkInput" placeholder="https://example.com/file1.pdf&#10;https://example.com/file2.pdf"></textarea>
+        <button onclick="processBulkLinks()">Process Links</button>
+    </div>
+
+    <div id="result">
+        <p>PDF links will appear here...</p>
+    </div>
+
+    <div id="downloadFrames"></div>
+
+    <script>
+        let downloadQueue = [];
+        let isDownloading = false;
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab:nth-child(${tab === 'webpage' ? '1' : '2'})`).classList.add('active');
+            document.getElementById('webpage-input').style.display = tab === 'webpage' ? 'block' : 'none';
+            document.getElementById('bulk-input').style.display = tab === 'bulk' ? 'block' : 'none';
+        }
+
+        function getFilenameFromUrl(url) {
+            try {
+                const urlObj = new URL(url);
+                const pathname = urlObj.pathname;
+                const filename = pathname.substring(pathname.lastIndexOf('/') + 1);
+                return filename || 'download.pdf';
+            } catch {
+                return 'download.pdf';
+            }
+        }
+
+        async function processBulkLinks() {
+            const bulkInput = document.getElementById('bulkInput');
+            const resultDiv = document.getElementById('result');
+            
+            const links = bulkInput.value
+                .split('\n')
+                .map(url => url.trim())
+                .filter(url => url && (url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf?')));
+
+            if (links.length === 0) {
+                resultDiv.innerHTML = '<p style="color: red">Please enter at least one valid PDF URL</p>';
+                return;
+            }
+
+            downloadQueue = links.map(url => ({
+                url,
+                text: getFilenameFromUrl(url),
+                status: 'pending'
+            }));
+
+            displayResults(downloadQueue);
+        }
+
+        async function findPDFs() {
+            const urlInput = document.getElementById('urlInput');
+            const resultDiv = document.getElementById('result');
+            
+            if (!urlInput.value) {
+                resultDiv.innerHTML = '<p style="color: red">Please enter a valid URL</p>';
+                return;
+            }
+
+            try {
+                resultDiv.innerHTML = '<p>Searching for PDF links...</p>';
+                
+                const proxyUrl = 'https://api.allorigins.win/get?url=';
+                const response = await fetch(proxyUrl + encodeURIComponent(urlInput.value));
+                const data = await response.json();
+                
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(data.contents, 'text/html');
+                
+                const links = doc.getElementsByTagName('a');
+                downloadQueue = Array.from(links)
+                    .filter(link => {
+                        const href = link.href.toLowerCase();
+                        return href.endsWith('.pdf') || href.includes('.pdf?');
+                    })
+                    .map(link => {
+                        const absoluteUrl = new URL(link.href, urlInput.value).href;
+                        return {
+                            url: absoluteUrl,
+                            text: link.textContent.trim() || getFilenameFromUrl(absoluteUrl),
+                            status: 'pending'
+                        };
+                    });
+
+                displayResults(downloadQueue);
+
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <p style="color: red">
+                        Error: ${error.message}<br>
+                        Make sure the URL is correct and the website allows access.
+                    </p>
+                `;
+            }
+        }
+
+        function displayResults(pdfLinks) {
+            const resultDiv = document.getElementById('result');
+
+            if (pdfLinks.length === 0) {
+                resultDiv.innerHTML = '<p>No PDF links found.</p>';
+                return;
+            }
+
+            resultDiv.innerHTML = `
+                <h3>Found ${pdfLinks.length} PDF links:</h3>
+                <div id="links-container">
+                    ${pdfLinks.map((link, index) => `
+                        <div class="pdf-link" id="link-${index}">
+                            <div>
+                                📄 ${link.text}
+                                <br>
+                                <small>${link.url}</small>
+                            </div>
+                            <div>
+                                <button onclick="downloadSingle(${index})">Download</button>
+                                <span class="status ${link.status}">${link.status}</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div style="margin-top: 1rem">
+                    <button onclick="downloadAll()" id="downloadAllBtn">Download All</button>
+                    <button onclick="stopDownloads()" id="stopBtn" style="display: none">Stop Downloads</button>
+                </div>
+            `;
+        }
+
+        function updateLinkStatus(index, status) {
+            downloadQueue[index].status = status;
+            const statusSpan = document.querySelector(`#link-${index} .status`);
+            if (statusSpan) {
+                statusSpan.className = `status ${status}`;
+                statusSpan.textContent = status;
+            }
+        }
+
+        async function downloadSingle(index) {
+            const link = downloadQueue[index];
+            try {
+                updateLinkStatus(index, 'downloading');
+                
+                // Create an anchor element and trigger download
+                const a = document.createElement('a');
+                a.href = link.url;
+                a.download = link.text;
+                a.target = '_blank';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                
+                updateLinkStatus(index, 'success');
+            } catch (error) {
+                console.error(`Failed to download ${link.url}:`, error);
+                updateLinkStatus(index, 'error');
+            }
+        }
+
+        async function downloadAll() {
+            if (isDownloading) return;
+            
+            document.getElementById('downloadAllBtn').style.display = 'none';
+            document.getElementById('stopBtn').style.display = 'inline-block';
+            
+            isDownloading = true;
+            
+            for (let i = 0; i < downloadQueue.length && isDownloading; i++) {
+                await downloadSingle(i);
+                // Add delay between downloads to prevent browser throttling
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            isDownloading = false;
+            document.getElementById('downloadAllBtn').style.display = 'inline-block';
+            document.getElementById('stopBtn').style.display = 'none';
+        }
+
+        function stopDownloads() {
+            isDownloading = false;
+            document.getElementById('downloadAllBtn').style.display = 'inline-block';
+            document.getElementById('stopBtn').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
